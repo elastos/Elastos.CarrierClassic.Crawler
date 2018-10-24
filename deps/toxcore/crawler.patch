@@ -1,0 +1,49 @@
+diff -ruN c-toxcore-0.1.10-mod/toxcore/DHT.c c-toxcore-0.1.10-addon/toxcore/DHT.c
+--- c-toxcore-0.1.10-mod/toxcore/DHT.c	2018-10-24 11:41:07.000000000 +0800
++++ c-toxcore-0.1.10-addon/toxcore/DHT.c	2018-10-24 11:50:46.000000000 +0800
+@@ -1410,6 +1410,13 @@
+     return 0;
+ }
+ 
++/* Set the callback function that will be executed when we get a getnodes response. */
++void DHT_callback_getnodes_response(DHT *dht, void (*func)(IP_Port *, const uint8_t *, void *), void *userdata)
++{
++    dht->getnodes_response = func;
++    dht->getnodes_response_data = userdata;
++}
++
+ static int handle_sendnodes_ipv6(void *object, IP_Port source, const uint8_t *packet, uint16_t length, void *userdata)
+ {
+     DHT *dht = (DHT *)object;
+@@ -1429,6 +1436,10 @@
+             ping_node_from_getnodes_ok(dht, plain_nodes[i].public_key, plain_nodes[i].ip_port);
+             returnedip_ports(dht, plain_nodes[i].ip_port, plain_nodes[i].public_key, packet + 1);
+         }
++
++        if (dht->getnodes_response) {
++            dht->getnodes_response(&plain_nodes[i].ip_port, plain_nodes[i].public_key, dht->getnodes_response_data);
++        }
+     }
+ 
+     return 0;
+diff -ruN c-toxcore-0.1.10-mod/toxcore/DHT.h c-toxcore-0.1.10-addon/toxcore/DHT.h
+--- c-toxcore-0.1.10-mod/toxcore/DHT.h	2017-08-06 18:22:48.000000000 +0800
++++ c-toxcore-0.1.10-addon/toxcore/DHT.h	2018-10-24 11:47:22.000000000 +0800
+@@ -272,9 +272,17 @@
+ 
+     Node_format to_bootstrap[MAX_CLOSE_TO_BOOTSTRAP_NODES];
+     unsigned int num_to_bootstrap;
++
++    void (*getnodes_response)(IP_Port *, const uint8_t *public_key, void *);
++    void *getnodes_response_data;
+ } DHT;
+ /*----------------------------------------------------------------------------------*/
+ 
++/*
++ * Set the callback function that will be executed when we get a getnodes response.
++ */
++void DHT_callback_getnodes_response(DHT *dht, void (*func)(IP_Port *, const uint8_t *, void *), void *userdata);
++
+ /* Shared key generations are costly, it is therefor smart to store commonly used
+  * ones so that they can re used later without being computed again.
+  *
