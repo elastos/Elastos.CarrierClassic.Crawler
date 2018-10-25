@@ -42,7 +42,8 @@ set(LIBS
     toxgroup
     toxmessenger
     toxnetwork
-    toxnetcrypto)
+    toxnetcrypto
+    crystal)
 
 if(WIN32)
     set(LIBS

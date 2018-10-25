@@ -34,13 +34,22 @@ bool timed_out(time_t timestamp, time_t timeout);
 void get_time_format(char *buf, int bufsize);
 
 /*
- * Converts a hexidecimal string of length hex_len to binary format and puts the result in output.
+ * Converts a base58-based string of length hex_len to binary format and puts the result in output.
  * output_size must be exactly half of hex_len.
  *
  * Returns 0 on success.
  * Returns -1 on failure.
  */
-int hex_string_to_bin(const char *hex_string, size_t hex_len, char *output, size_t output_size);
+int bin_to_base58_string(const uint8_t *bin, size_t bin_len, char *output, size_t output_size);
+
+/*
+ * Converts a base58-based string of length hex_len to binary format and puts the result in output.
+ * output_size must be exactly half of hex_len.
+ *
+ * Returns 0 on success.
+ * Returns -1 on failure.
+ */
+int base58_string_to_bin(const char *hex_string, size_t hex_len, char *output, size_t output_size);
 
 /* Puts log file path into buf in the form: BASE_LOG_PATH/YY-mm-dd/unixtime
  * The date is the current day, and the unixtime is the current unixtime.

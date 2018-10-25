@@ -26,6 +26,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <base58.h>
 
 /* Returns the current unix time. */
 time_t get_time(void)
@@ -49,47 +50,38 @@ void get_time_format(char *buf, int bufsize)
 }
 
 /*
- * Converts a hexidecimal string of length hex_len to binary format and puts the result in output.
+ * Converts a base58-based string of length hex_len to binary format and puts the result in output.
  * output_size must be exactly half of hex_len.
  *
  * Returns 0 on success.
  * Returns -1 on failure.
  */
-int hex_string_to_bin(const char *hex_string, size_t hex_len, char *output, size_t output_size)
+
+int base58_string_to_bin(const char *key, size_t base58_len, uint8_t *bin, size_t length)
 {
-    if (output_size == 0 || hex_len != output_size * 2) {
+    if (length == 0 || base58_len != strlen(key))
         return -1;
-    }
 
-    for (size_t i = 0; i < output_size; ++i) {
-        sscanf(hex_string, "%2hhx", &output[i]);
-        hex_string += 2;
-    }
-
-    return 0;
+    return (base58_decode(key, strlen(key), bin, length) == 32 ? 0 : -1);
 }
 
 /*
- * Converts a hexidecimal string of length hex_len to binary format and puts the result in output.
+ * Converts a base58-based string of length hex_len to binary format and puts the result in output.
  * output_size must be exactly half of hex_len.
  *
  * Returns 0 on success.
  * Returns -1 on failure.
  */
-int bin_to_hex_string(const uint8_t *bin, size_t bin_len, char *output, size_t output_size)
+int bin_to_base58_string(const uint8_t *bin, size_t bin_len, char *output, size_t output_size)
 {
     size_t i;
+    size_t textlen = output_size;
+    char *key;
 
-    if (output_size == 0 || bin_len * 2 >= output_size) {
-        return -1;
-    }
+    if (!output || textlen < 46)
+        return  -1;
 
-    for (i = 0; i < bin_len; ++i) {
-        sprintf(output + (i * 2), "%02x", bin[i]);
-    }
-    output[i * 2 + 1] = 0;
-
-    return 0;
+    return base58_encode(bin, bin_len, output, &textlen) ? 0 : -1;
 }
 /* Puts logfile path into buf in the form: BASE_LOG_PATH/YYYY-mm-dd/unix-timestamp.cwl
  *

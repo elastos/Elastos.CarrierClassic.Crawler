@@ -91,22 +91,11 @@ static struct toxNodes {
     uint16_t    port;
     const char *key;
 } bs_nodes[] = {
-    { "198.98.51.198",   33445, "1D5A5F2F5D6233058BF0259B09622FB40B482E4FA0931EB8FD3AB8E7BF7DAF6F" },
-    { "130.133.110.14",  33445, "461FA3776EF0FA655F1A05477DF1B3B614F7D6B124F7DB1DD4FE3C08B03B640F" },
-    { "205.185.116.116", 33445, "A179B09749AC826FF01F37A9613F6B57118AE014D4196A0E1105A98F93A54702" },
-    { "51.254.84.212",   33445, "AEC204B9A4501412D5F0BB67D9C81B5DB3EE6ADA64122D32A3E9B093D544327D" },
-    { "185.14.30.213",   443,   "2555763C8C460495B14157D234DD56B86300A2395554BCAE4621AC345B8C1B1B" },
-    { "194.249.212.109", 33445, "3CEE1F054081E7A011234883BC4FC39F661A55B73637A5AC293DDF1251D9432B" },
-    { "5.189.176.217",   5190,  "2B2137E094F743AC8BD44652C55F41DFACC502F125E99E4FE24D40537489E32F" },
-    { "136.243.141.187", 443,   "6EE1FADE9F55CC7938234CC07C864081FC606D8FE7B751EDA217F268F1078A39" },
-    { "144.217.86.39",   33445, "7E5668E0EE09E19F320AD47902419331FFEE147BB3606769CFBE921A2A2FD34C" },
-    { "37.97.185.116",   5190,  "E59A0E71ADA20D35BD1B0957059D7EF7E7792B3D680AE25C6F4DBBA09114D165" },
-    { "80.87.193.193",   33445, "B38255EE4B054924F6D79A5E6E5889EC94B6ADF6FE9906F97A3D01E3D083223A" },
-    { "37.48.122.22",    33445, "1B5A8AB25FFFB66620A531C4646B47F0F32B74C547B30AF8BD8266CA50A3AB59" },
-    { "104.223.122.15",  33445, "0FB96EEBFB1650DDB52E70CF773DDFCABE25A95CC3BB50FC251082E4B63EF82A" },
-    { "37.187.122.30",   33445, "BEB71F97ED9C99C04B8489BB75579EB4DC6AB6F441B603D63533122F1858B51D" },
-    { "192.99.232.158",  33445, "7B6CB208C811DEA8782711CE0CAD456AAC0C7B165A0498A1AA7010D2F2EC996C" },
-    { "46.229.52.198",   33445, "813C8F4187833EF0655B10F7752141A352248462A567529A38B6BBF73E979307" },
+    {"13.58.208.50",    33445,  "89vny8MrKdDKs7Uta9RdVmspPjnRMdwMmaiEW27pZ7gh" },
+    {"18.216.102.47",   33445,  "G5z8MqiNDFTadFUPfMdYsYtkUDbX5mNCMVHMZtsCnFeb" },
+    {"18.216.6.197",    33445,  "H8sqhRrQuJZ6iLtP2wanxt4LzdNrN2NNFnpPdq1uJ9n2" },
+    {"52.83.171.135",   33445,  "5tuHgK1Q4CYf4K5PutsEPK5E3Z7cbtEBdx7LwmdzqXHL" },
+    {"52.83.191.228",   33445,  "3khtxZo89SBScAMaHhTvD68pPHiKxgZT6hTCSZZVgNEm" },
     { NULL, 0, NULL },
 };
 
@@ -115,7 +104,7 @@ static void bootstrap_tox(Crawler *cwl)
 {
     for (size_t i = 0; bs_nodes[i].ip != NULL; ++i) {
         char bin_key[TOX_PUBLIC_KEY_SIZE];
-        if (hex_string_to_bin(bs_nodes[i].key, strlen(bs_nodes[i].key), bin_key, sizeof(bin_key)) == -1) {
+        if (base58_string_to_bin(bs_nodes[i].key, strlen(bs_nodes[i].key), bin_key, sizeof(bin_key)) == -1) {
             continue;
         }
 
@@ -160,8 +149,6 @@ static inline uint64_t gettid()
 }
 #endif
 
-int bin_to_hex_string(const uint8_t *bin, size_t bin_len, char *output, size_t output_size);
-
 void cb_getnodes_response(IP_Port *ip_port, const uint8_t *public_key, void *object)
 {
     Crawler *cwl = object;
@@ -190,7 +177,7 @@ void cb_getnodes_response(IP_Port *ip_port, const uint8_t *public_key, void *obj
     {
         char id_str[128];
         char ip_str[IP_NTOA_LEN];
-        bin_to_hex_string(public_key, TOX_PUBLIC_KEY_SIZE, id_str, sizeof(id_str));
+        bin_to_base58_string(public_key, TOX_PUBLIC_KEY_SIZE, id_str, sizeof(id_str));
         ip_ntoa(&ip_port->ip, ip_str, sizeof(ip_str));
 
         printf("Thread %llu: %-8d[%s %s]\n", gettid(), cwl->num_nodes, id_str, ip_str);
@@ -303,7 +290,7 @@ static int crawler_dump_log(Crawler *cwl)
     for (uint32_t i = 0; i < cwl->num_nodes; ++i) {
         char id_str[128];
         char ip_str[IP_NTOA_LEN];
-        bin_to_hex_string(cwl->nodes_list[i].public_key, CRYPTO_PUBLIC_KEY_SIZE, id_str, sizeof(id_str));
+        bin_to_base58_string(cwl->nodes_list[i].public_key, CRYPTO_PUBLIC_KEY_SIZE, id_str, sizeof(id_str));
         ip_ntoa(&cwl->nodes_list[i].ip_port.ip, ip_str, sizeof(ip_str));
         fprintf(fp, "%s %s\n", id_str, ip_str);
     }
