@@ -27,38 +27,30 @@
 #include <time.h>
 #include <signal.h>
 #include <limits.h>
+#include <errno.h>
+#include <getopt.h>
+#include <sys/stat.h>
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
 #include <sys/types.h>
 
+#include <rc_mem.h>
+#include <base58.h>
+#include <vlog.h>
+
 #include <tox/tox.h>
 #include "toxcore/DHT.h"
 #include "toxcore/Messenger.h"
 
+#include "config.h"
 #include "util.h"
 
-/* Seconds to wait between new crawler instances */
-#define NEW_CRAWLER_INTERVAL 180
-
-/* Maximum number of concurrent crawler instances */
-#define MAX_CRAWLERS 6
-
-/* Number of seconds to wait for new nodes before a crawler times out and exits */
-#define CRAWLER_TIMEOUT 20
-
-/* Default maximum number of nodes the nodes list can store */
-#define DEFAULT_NODES_LIST_SIZE 4096
-
-/* Seconds to wait between getnodes requests */
-#define GETNODES_REQUEST_INTERVAL 1
-
-/* Max number of nodes to send getnodes requests to per GETNODES_REQUEST_INTERVAL */
-#define MAX_GETNODES_REQUESTS 4
-
-/* Number of random node requests to make for each node we send a request to */
-#define NUM_RAND_GETNODE_REQUESTS 32
-
+static crawler_config *config;
+static int interrupted = 0;
+static uint32_t running_crawlers = 0;
+static time_t last_crawler_stamp;
+static uint32_t last_index = 0;
 
 typedef struct Crawler {
     Tox         *tox;
@@ -70,10 +62,11 @@ typedef struct Crawler {
     time_t       last_new_node;   /* Last time we found an unknown node */
     time_t       last_getnodes_request;
 
-    pthread_t      tid;
-    pthread_attr_t attr;
+    pthread_t    tid;
+    time_t       stamp;
+    uint32_t     round;
+    uint32_t     index;
 } Crawler;
-
 
 /* Use these to lock and unlock the global threads struct */
 #define LOCK   pthread_mutex_lock(&threads.lock)
@@ -85,44 +78,49 @@ struct Threads {
     pthread_mutex_t lock;
 } threads;
 
+static inline time_t now(void)
+{
+    return time(NULL);
+}
 
-static struct toxNodes {
-    const char *ip;
-    uint16_t    port;
-    const char *key;
-} bs_nodes[] = {
-    {"13.58.208.50",    33445,  "89vny8MrKdDKs7Uta9RdVmspPjnRMdwMmaiEW27pZ7gh" },
-    {"18.216.102.47",   33445,  "G5z8MqiNDFTadFUPfMdYsYtkUDbX5mNCMVHMZtsCnFeb" },
-    {"18.216.6.197",    33445,  "H8sqhRrQuJZ6iLtP2wanxt4LzdNrN2NNFnpPdq1uJ9n2" },
-    {"52.83.171.135",   33445,  "5tuHgK1Q4CYf4K5PutsEPK5E3Z7cbtEBdx7LwmdzqXHL" },
-    {"52.83.191.228",   33445,  "3khtxZo89SBScAMaHhTvD68pPHiKxgZT6hTCSZZVgNEm" },
-    { NULL, 0, NULL },
-};
+static inline bool timedout(time_t timestamp, time_t timeout)
+{
+    return timestamp + timeout <= now();
+}
 
 /* Attempts to bootstrap to every listed bootstrap node */
-static void bootstrap_tox(Crawler *cwl)
+static void crawler_bootstrap(Crawler *cwl)
 {
-    for (size_t i = 0; bs_nodes[i].ip != NULL; ++i) {
-        char bin_key[TOX_PUBLIC_KEY_SIZE];
-        if (base58_string_to_bin(bs_nodes[i].key, strlen(bs_nodes[i].key), bin_key, sizeof(bin_key)) == -1) {
-            continue;
-        }
-
+    for (int i = 0; i < config->bootstraps_size; ++i) {
         TOX_ERR_BOOTSTRAP err;
-        tox_bootstrap(cwl->tox, bs_nodes[i].ip, bs_nodes[i].port, (uint8_t *) bin_key, &err);
+        bootstrap_node *bs_node = config->bootstraps + i;
 
-        if (err != TOX_ERR_BOOTSTRAP_OK) {
-            fprintf(stderr, "Failed to bootstrap DHT via: %s %d (error %d)\n", bs_nodes[i].ip, bs_nodes[i].port, err);
+        uint8_t bin_key[TOX_PUBLIC_KEY_SIZE];
+        if (base58_decode(bs_node->key, strlen(bs_node->key),
+                bin_key, sizeof(bin_key)) == sizeof(bin_key))
+            continue;
+
+        if (bs_node->ipv4) {
+            tox_bootstrap(cwl->tox, bs_node->ipv4, bs_node->port, bin_key, &err);
+            if (err != TOX_ERR_BOOTSTRAP_OK)
+                fprintf(stderr, "Failed to bootstrap DHT via: %s %d (error %d)\n",
+                        bs_node->ipv4, bs_node->port, err);
         }
+
+        if (bs_node->ipv6) {
+            tox_bootstrap(cwl->tox, bs_node->ipv6, bs_node->port, bin_key, &err);
+            if (err != TOX_ERR_BOOTSTRAP_OK)
+                fprintf(stderr, "Failed to bootstrap DHT via: %s %d (error %d)\n",
+                        bs_node->ipv6, bs_node->port, err);
+        }
+
     }
 }
 
-static volatile bool FLAG_EXIT = false;
-static void catch_SIGINT(int sig)
+static void crawler_interrupt(int sig)
 {
-    LOCK;
-    FLAG_EXIT = true;
-    UNLOCK;
+    vlogI("Controller - INT signal catched, interrupte all crawlers.");
+    interrupted = 1;
 }
 
 /*
@@ -140,16 +138,7 @@ static bool node_crawled(Crawler *cwl, const uint8_t *public_key)
     return false;
 }
 
-#if defined(__APPLE__) || defined(__OSX__)
-static inline uint64_t gettid()
-{
-    uint64_t tid;
-    pthread_threadid_np(NULL, &tid);
-    return tid;
-}
-#endif
-
-void cb_getnodes_response(IP_Port *ip_port, const uint8_t *public_key, void *object)
+static void getnodes_response_callback(IP_Port *ip_port, const uint8_t *public_key, void *object)
 {
     Crawler *cwl = object;
 
@@ -172,37 +161,38 @@ void cb_getnodes_response(IP_Port *ip_port, const uint8_t *public_key, void *obj
     memcpy(&node.ip_port, ip_port, sizeof(IP_Port));
     memcpy(node.public_key, public_key, TOX_PUBLIC_KEY_SIZE);
     memcpy(&cwl->nodes_list[cwl->num_nodes++], &node, sizeof(Node_format));
-    cwl->last_new_node = get_time();
+    cwl->last_new_node = time(NULL);
 
     {
         char id_str[128];
         char ip_str[IP_NTOA_LEN];
-        bin_to_base58_string(public_key, TOX_PUBLIC_KEY_SIZE, id_str, sizeof(id_str));
+        size_t len = sizeof(id_str);
+        base58_encode(public_key, TOX_PUBLIC_KEY_SIZE, id_str, &len);
         ip_ntoa(&ip_port->ip, ip_str, sizeof(ip_str));
 
-        printf("Thread %llu: %-8d[%s %s]\n", gettid(), cwl->num_nodes, id_str, ip_str);
+        vlogV("Crawler[%u/%u] - %s %s - %u", cwl->round, cwl->index, id_str, ip_str, cwl->num_nodes);
     }
 }
 
 /*
- * Sends a getnodes request to up to MAX_GETNODES_REQUESTS nodes in the nodes list that have not been queried.
+ * Sends a getnodes request to up to config->requests_per_interval nodes in the nodes list that have not been queried.
  * Returns the number of requests sent.
  */
-static size_t send_node_requests(Crawler *cwl)
+static size_t crawler_send_node_requests(Crawler *cwl)
 {
-    if (!timed_out(cwl->last_getnodes_request, GETNODES_REQUEST_INTERVAL)) {
+    if (!timedout(cwl->last_getnodes_request, config->request_interval)) {
         return 0;
     }
 
     size_t count = 0;
     uint32_t i;
 
-    for (i = cwl->send_ptr; count < MAX_GETNODES_REQUESTS && i < cwl->num_nodes; ++i) {
+    for (i = cwl->send_ptr; count < config->requests_per_interval && i < cwl->num_nodes; ++i) {
         DHT_getnodes(cwl->dht, &cwl->nodes_list[i].ip_port,
                      cwl->nodes_list[i].public_key,
                      cwl->nodes_list[i].public_key);
 
-        for (size_t j = 0; j < NUM_RAND_GETNODE_REQUESTS; ++j) {
+        for (size_t j = 0; j < config->random_requests; ++j) {
             int r = rand() % cwl->num_nodes;
 
             DHT_getnodes(cwl->dht, &cwl->nodes_list[i].ip_port,
@@ -214,7 +204,7 @@ static size_t send_node_requests(Crawler *cwl)
     }
 
     cwl->send_ptr = i;
-    cwl->last_getnodes_request = get_time();
+    cwl->last_getnodes_request = time(NULL);
 
     return count;
 }
@@ -223,83 +213,152 @@ static size_t send_node_requests(Crawler *cwl)
  * Returns a pointer to an inactive crawler in the threads array.
  * Returns NULL if there are no crawlers available.
  */
-Crawler *crawler_new(void)
+static Crawler *crawler_new(void)
 {
-    Crawler *cwl = calloc(1, sizeof(Crawler));
-
-    if (cwl == NULL) {
-        return cwl;
-    }
-
-    Node_format *nodes_list = malloc(DEFAULT_NODES_LIST_SIZE * sizeof(Node_format));
-
-    if (nodes_list == NULL) {
-        free(cwl);
-        return NULL;
-    }
-
-    struct Tox_Options options;
-    tox_options_default(&options);
-
+    Crawler *cwl;
     TOX_ERR_NEW err;
-    Tox *tox = tox_new(&options, &err);
+    struct Tox_Options options;
 
-    if (err != TOX_ERR_NEW_OK || tox == NULL) {
-        fprintf(stderr, "tox_new() failed: %d\n", err);
+    cwl = calloc(1, sizeof(Crawler));
+    if (cwl == NULL)
+        return NULL;
+
+    cwl->nodes_list = malloc(config->initial_nodes_list_size * sizeof(Node_format));
+    if (cwl->nodes_list == NULL) {
         free(cwl);
-        free(nodes_list);
+        return NULL;
+    }
+    cwl->nodes_list_size = config->initial_nodes_list_size;
+
+    tox_options_default(&options);
+    cwl->tox = tox_new(&options, &err);
+    if (err != TOX_ERR_NEW_OK || cwl->tox == NULL) {
+        vlogE("Controller - create new Tox instance for crawler failed: %d\n", err);
+        free(cwl->nodes_list);
+        free(cwl);
         return NULL;
     }
 
-    Messenger *m = (Messenger *) tox;   // Casting fuckery so we can access the DHT object directly
-    cwl->dht = m->dht;
-    cwl->tox = tox;
-    cwl->nodes_list = nodes_list;
-    cwl->nodes_list_size = DEFAULT_NODES_LIST_SIZE;
+    cwl->dht = ((Messenger *)cwl->tox)->dht;   // Casting fuckery so we can access the DHT object directly
 
-    DHT_callback_getnodes_response(cwl->dht, cb_getnodes_response, cwl);
+    DHT_callback_getnodes_response(cwl->dht, getnodes_response_callback, cwl);
 
-    cwl->last_getnodes_request = get_time();
-    cwl->last_new_node = get_time();
+    cwl->stamp = now();
+    cwl->last_getnodes_request = cwl->stamp;
+    cwl->last_new_node = cwl->stamp;
+    cwl->round = (last_index / config->max_crawlers) + 1;
+    cwl->index = (last_index % config->max_crawlers) + 1;
 
-    bootstrap_tox(cwl);
+    crawler_bootstrap(cwl);
 
     return cwl;
 }
 
+static int mkdir_internal(const char *path, mode_t mode)
+{
+    struct stat st;
+    int rc = 0;
+
+    if (stat(path, &st) != 0 && errno == ENOENT) {
+        /* Directory does not exist. EEXIST for race condition */
+        if (mkdir(path, mode) != 0 && errno != EEXIST)
+            rc = -1;
+    } else if (!S_ISDIR(st.st_mode)) {
+        errno = ENOTDIR;
+        rc = -1;
+    }
+
+    return rc;
+}
+
+static int mkdirs(const char *path, mode_t mode)
+{
+    int rc = 0;
+    char *pp;
+    char *sp;
+    char copypath[PATH_MAX];
+
+    strncpy(copypath, path, sizeof(copypath));
+    copypath[sizeof(copypath) - 1] = 0;
+
+    pp = copypath;
+    while (rc == 0 && (sp = strchr(pp, '/')) != 0) {
+        if (sp != pp) {
+            /* Neither root nor double slash in path */
+            *sp = '\0';
+            rc = mkdir_internal(copypath, mode);
+            *sp = '/';
+        }
+        pp = sp + 1;
+    }
+
+    if (rc == 0)
+        rc = mkdir_internal(path, mode);
+
+    return rc;
+}
+
+static int crawler_get_data_filename(Crawler *cwl, char *buf, size_t buf_len)
+{
+    char tmstr[32];
+    char path[PATH_MAX];
+    struct stat st;
+
+    strftime(tmstr, sizeof(tmstr), "%Y-%m-%d", localtime(&cwl->stamp));
+    snprintf(path, sizeof(path), "%s/%s", config->data_dir, tmstr);
+
+    if (stat(path, &st) == -1 && errno == ENOENT) {
+        if (mkdirs(path, 0700) == -1) {
+            return -1;
+        }
+    }
+
+    strftime(tmstr, sizeof(tmstr), "%H%M%S", localtime(&cwl->stamp));
+    snprintf(buf, buf_len, "%s/%s.lst", path, tmstr);
+
+    return 0;
+}
+
 #define TEMP_FILE_EXT ".tmp"
 
-/* Dumps crawler nodes list to log file. */
-static int crawler_dump_log(Crawler *cwl)
+/* Dumps crawler nodes list to file. */
+static int crawler_dump_nodes(Crawler *cwl)
 {
-    char log_path[PATH_MAX];
-    if (get_log_path(log_path, sizeof(log_path)) == -1) {
+    int rc;
+    char data_file[PATH_MAX];
+    char temp_file[PATH_MAX];
+    FILE *fp;
+    char id_str[64];
+    char ip_str[IP_NTOA_LEN];
+
+    rc = crawler_get_data_filename(cwl, data_file, sizeof(data_file));
+    if (rc != 0) {
+        vlogE("Crwaler[%u/%u] - get node list filename failed: %d", cwl->round, cwl->index, errno);
         return -1;
     }
 
-    char log_path_temp[strlen(log_path) + strlen(TEMP_FILE_EXT) + 1];
-    snprintf(log_path_temp, sizeof(log_path_temp), "%s%s", log_path, TEMP_FILE_EXT);
+    vlogD("Crwaler[%u/%u] - current node list filename: %s", cwl->round, cwl->index, data_file);
 
-    FILE *fp = fopen(log_path_temp, "w");
+    snprintf(temp_file, sizeof(temp_file), "%s%s", data_file, TEMP_FILE_EXT);
 
+    fp = fopen(temp_file, "w");
     if (fp == NULL) {
-        return -2;
+        vlogE("Crwaler[%u/%u] - open node list filename failed: %d", cwl->round, cwl->index, errno);
+        return -1;
     }
 
-    LOCK;   // ip_ntoa() isn't thread safe
     for (uint32_t i = 0; i < cwl->num_nodes; ++i) {
-        char id_str[128];
-        char ip_str[IP_NTOA_LEN];
-        bin_to_base58_string(cwl->nodes_list[i].public_key, CRYPTO_PUBLIC_KEY_SIZE, id_str, sizeof(id_str));
+        size_t len = sizeof(id_str);
+        base58_encode(cwl->nodes_list[i].public_key, CRYPTO_PUBLIC_KEY_SIZE, id_str, &len);
         ip_ntoa(&cwl->nodes_list[i].ip_port.ip, ip_str, sizeof(ip_str));
         fprintf(fp, "%s %s\n", id_str, ip_str);
     }
-    UNLOCK;
 
     fclose(fp);
 
-    if (rename(log_path_temp, log_path) != 0) {
-        return -3;
+    if (rename(temp_file, data_file) != 0) {
+        vlogE("Crwaler[%u/%u] - rename temp node list filename failed: %d", cwl->round, cwl->index, errno);
+        return -1;
     }
 
     return 0;
@@ -307,7 +366,6 @@ static int crawler_dump_log(Crawler *cwl)
 
 static void crawler_kill(Crawler *cwl)
 {
-    pthread_attr_destroy(&cwl->attr);
     tox_kill(cwl->tox);
     free(cwl->nodes_list);
     free(cwl);
@@ -316,153 +374,213 @@ static void crawler_kill(Crawler *cwl)
 /* Returns true if the crawler is unable to find new nodes in the DHT or the exit flag has been triggered */
 static bool crawler_finished(Crawler *cwl)
 {
-    LOCK;
-    if (FLAG_EXIT || (cwl->send_ptr == cwl->num_nodes && timed_out(cwl->last_new_node, CRAWLER_TIMEOUT))) {
-        UNLOCK;
+    if (interrupted || (cwl->send_ptr == cwl->num_nodes &&
+            timedout(cwl->last_new_node, config->timeout))) {
         return true;
     }
-    UNLOCK;
 
     return false;
 }
 
-void *do_crawler_thread(void *data)
+void *crawler_thread_routine(void *data)
 {
-    Crawler *cwl = (Crawler *) data;
+    Crawler *cwl = (Crawler *)data;
+
+    __sync_add_and_fetch(&running_crawlers, 1);
+
+    vlogI("Crawler[%u/%u] - created and running.", cwl->round, cwl->index);
 
     while (!crawler_finished(cwl)) {
         tox_iterate(cwl->tox, NULL);
-        send_node_requests(cwl);
+        crawler_send_node_requests(cwl);
         usleep(tox_iteration_interval(cwl->tox) * 1000);
     }
 
-    char time_format[128];
-    get_time_format(time_format, sizeof(time_format));
-    fprintf(stderr, "[%s] Nodes: %llu\n", time_format, (unsigned long long) cwl->num_nodes);
-
-    LOCK;
-    bool interrupted = FLAG_EXIT;
-    UNLOCK;
+    vlogI("Crawler[%u/%u] - discovered %u nodes.", cwl->round, cwl->index, cwl->num_nodes);
 
     if (!interrupted) {
-        int ret = crawler_dump_log(cwl);
+        int rc;
 
-        if (ret < 0) {
-            fprintf(stderr, "crawler_dump_log() failed with error %d\n", ret);
+        vlogI("Crawler[%u/%u] - dumping nodes list...", cwl->round, cwl->index);
+        rc = crawler_dump_nodes(cwl);
+        if (rc != 0) {
+            vlogE("Crawler[%u/%u] - dumping nodes list failed: ", cwl->round, cwl->index, rc);
+        } else {
+            vlogI("Crawler[%u/%u] - dumping nodes list success", cwl->round, cwl->index);
         }
     }
 
     crawler_kill(cwl);
 
-    LOCK;
-    --threads.num_active;
-    UNLOCK;
+    __sync_sub_and_fetch(&running_crawlers, 1);
 
-    pthread_exit(0);
-}
+    vlogI("Crawler[%u/%u] finished and cleaned up.", cwl->round, cwl->index);
 
-/* Initializes a crawler thread.
- *
- * Returns 0 on success.
- * Returns -1 if thread attributes cannot be set.
- * Returns -2 if thread state cannot be set.
- * Returns -3 if thread cannot be created.
- */
-static int init_crawler_thread(Crawler *cwl)
-{
-    if (pthread_attr_init(&cwl->attr) != 0) {
-        return -1;
-    }
-
-    if (pthread_attr_setdetachstate(&cwl->attr, PTHREAD_CREATE_DETACHED) != 0) {
-        pthread_attr_destroy(&cwl->attr);
-        return -2;
-    }
-
-    if (pthread_create(&cwl->tid, NULL, do_crawler_thread, (void *) cwl) != 0) {
-        pthread_attr_destroy(&cwl->attr);
-        return -3;
-    }
-
-    return 0;
+    return NULL;
 }
 
 /*
- * Creates new crawler instances.
+ * Control crawler instances according config parameters.
  *
- * Returns 0 on success or if new instance is not needed.
- * Returns -1 if crawler instance fails to initialize.
- * Returns -2 if thread fails to initialize.
+ * Returns 0 on success or if new instance is not needed, otherwise returns
+ * error number
  */
-static int do_thread_control(void)
+#define INTERVAL2       90
+
+static int crawler_controller(void)
 {
-    LOCK;
-    if (threads.num_active >= MAX_CRAWLERS || !timed_out(threads.last_created, NEW_CRAWLER_INTERVAL)) {
-        UNLOCK;
+    pthread_attr_t attr;
+    Crawler *cwl;
+    uint32_t interval;
+    int rc;
+
+    interval = (last_index % config->max_crawlers) ? INTERVAL2 : config->interval;
+
+    vlogV("Controller - inspection, %d crawlers running.", running_crawlers);
+    vlogD("Controller - inspection, current interval %d.", interval);
+
+    if (running_crawlers >= config->max_crawlers || ! timedout(last_crawler_stamp, interval))
         return 0;
-    }
-    UNLOCK;
 
-    Crawler *cwl = crawler_new();
-
+    cwl = crawler_new();
     if (cwl == NULL) {
+        vlogE("Controller - Create new crawler failed.");
         return -1;
     }
 
-    int ret = init_crawler_thread(cwl);
+    memset(&attr, 0, sizeof(attr)); // guarantee no random values if init failed.
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
-    if (ret != 0) {
-        fprintf(stderr, "init_crawler_thread() failed with error: %d\n", ret);
-        return -2;
+    rc = pthread_create(&cwl->tid, &attr, crawler_thread_routine, (void *)cwl);
+    pthread_attr_destroy(&attr);
+
+    if (rc != 0) {
+        vlogE("Controller - Create new crawler thread failed: %d\n", rc);
+        return -1;
     }
 
-    threads.last_created = get_time();
+    last_crawler_stamp = now();
 
-    LOCK;
-    ++threads.num_active;
-    UNLOCK;
+    last_index++;
+    if ((last_index % config->max_crawlers) == 0)
+        last_crawler_stamp -= (INTERVAL2 * config->max_crawlers);
 
     return 0;
+}
+
+#ifdef HAVE_SYS_RESOURCE_H
+#include <sys/resource.h>
+
+int sys_coredump_set(bool enable)
+{
+    const struct rlimit rlim = {
+        enable ? RLIM_INFINITY : 0,
+        enable ? RLIM_INFINITY : 0
+    };
+
+    return setrlimit(RLIMIT_CORE, &rlim);
+}
+#endif
+
+static void usage(void)
+{
+    printf("Elastos Carrier Crawler.\n");
+    printf("Usage: elacrawler [OPTION]...\n");
+    printf("\n");
+    printf("  -c, --config=CONFIG_FILE  Set config file path.\n");
+    printf("      --once                Run once then exit.\n");
+    printf("      --debug               Wait for debugger attach after start.\n");
+    printf("\n");
 }
 
 int main(int argc, char **argv)
 {
+    int wait_for_attach = 0;
+    char config_file[PATH_MAX+1] = {0};
+    int log_level = -1;
+
+    int opt;
+    int idx;
+    struct option options[] = {
+        { "config",         required_argument,  NULL, 'c' },
+        { "verbose",        required_argument,  NULL, 'v' },
+        { "debug",          no_argument,        NULL, 1 },
+        { "help",           no_argument,        NULL, 'h' },
+        { NULL,             0,                  NULL, 0 }
+    };
+
+#ifdef HAVE_SYS_RESOURCE_H
+    sys_coredump_set(true);
+#endif
+
+    while ((opt = getopt_long(argc, argv, "c:v:h?",
+            options, &idx)) != -1) {
+        switch (opt) {
+        case 'c':
+            strncpy(config_file, optarg, sizeof(config_file));
+            config_file[sizeof(config_file)-1] = 0;
+            break;
+
+        case 'v':
+            log_level = atoi(optarg);
+            break;
+
+        case 1:
+            wait_for_attach = 1;
+            break;
+
+        case 'h':
+        case '?':
+        default:
+            usage();
+            exit(-1);
+        }
+    }
+
+    if (!*config_file) {
+        usage();
+        exit(-1);
+    }
+
+    if (wait_for_attach) {
+        printf("Wait for debugger attaching, process id is: %d.\n", getpid());
+#ifndef _MSC_VER
+        printf("After debugger attached, press any key to continue......");
+        getchar();
+        getchar();
+#else
+        DebugBreak();
+#endif
+    }
+
+    config = load_config(config_file);
+    if (!config) {
+        fprintf(stderr, "loading configure failed !\n");
+        return -1;
+    }
+
+    vlog_init(log_level > 0 ? log_level : config->log_level, config->log_file, NULL);
+
+    signal(SIGINT, crawler_interrupt);
+
     if (pthread_mutex_init(&threads.lock, NULL) != 0) {
         fprintf(stderr, "pthread mutex failed to init in main()\n");
         exit(EXIT_FAILURE);
     }
 
-    signal(SIGINT, catch_SIGINT);
 
     while (true) {
-        LOCK;
-        if (FLAG_EXIT) {
-            UNLOCK;
+        int rc;
+
+        if (interrupted)
             break;
-        }
-        UNLOCK;
 
-        int ret = do_thread_control();
-
-        if (ret < 0) {
-            fprintf(stderr, "do_thread_control() failed with error %d\n", ret);
-            sleep(5);
-        } else {
-            usleep(10000);
-        }
+        rc = crawler_controller();
+        sleep(rc == 0 ? 5 : 30);
     }
 
-    /* Wait for threads to exit cleanly */
-    while (true) {
-        LOCK;
-        if (threads.num_active == 0) {
-            UNLOCK;
-            break;
-        }
-        UNLOCK;
-
-        usleep(10000);
-    }
+    deref(config);
 
     return 0;
 }

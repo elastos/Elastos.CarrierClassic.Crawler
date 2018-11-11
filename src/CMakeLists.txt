@@ -9,12 +9,18 @@ if(HAVE_UNISTD_H)
     add_definitions(-DHAVE_UNISTD_H=1)
 endif()
 
+check_include_file(sys/resource.h HAVE_SYS_RESOURCE_H)
+if(HAVE_SYS_RESOURCE_H)
+    add_definitions(-DHAVE_SYS_RESOURCE_H=1)
+endif()
+
+
 #configure_file(
 #    version.h.in
 #    version.h
 #    "@ONLY")
 
-set(SRC main.c util.c)
+set(SRC main.c config.c)
 
 include_directories(
     .
@@ -43,7 +49,8 @@ set(LIBS
     toxmessenger
     toxnetwork
     toxnetcrypto
-    crystal)
+    crystal
+    config)
 
 if(WIN32)
     set(LIBS
