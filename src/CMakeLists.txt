@@ -14,13 +14,11 @@ if(HAVE_SYS_RESOURCE_H)
     add_definitions(-DHAVE_SYS_RESOURCE_H=1)
 endif()
 
-
-#configure_file(
-#    version.h.in
-#    version.h
-#    "@ONLY")
-
 set(SRC main.c config.c)
+
+if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+    set(SYSTEM_LIBS pthread)
+endif()
 
 include_directories(
     .

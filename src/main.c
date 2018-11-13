@@ -44,7 +44,6 @@
 #include "toxcore/Messenger.h"
 
 #include "config.h"
-#include "util.h"
 
 static crawler_config *config;
 static int interrupted = 0;
@@ -66,16 +65,6 @@ typedef struct Crawler {
     time_t       stamp;
     uint32_t     index;
 } Crawler;
-
-/* Use these to lock and unlock the global threads struct */
-#define LOCK   pthread_mutex_lock(&threads.lock)
-#define UNLOCK pthread_mutex_unlock(&threads.lock)
-
-struct Threads {
-    uint16_t  num_active;
-    time_t    last_created;
-    pthread_mutex_t lock;
-} threads;
 
 static inline time_t now(void)
 {
@@ -569,12 +558,6 @@ int main(int argc, char **argv)
     vlog_init(log_level > 0 ? log_level : config->log_level, config->log_file, NULL);
 
     signal(SIGINT, crawler_interrupt);
-
-    if (pthread_mutex_init(&threads.lock, NULL) != 0) {
-        fprintf(stderr, "pthread mutex failed to init in main()\n");
-        exit(EXIT_FAILURE);
-    }
-
 
     while (true) {
         int rc;
