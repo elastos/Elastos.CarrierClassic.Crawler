@@ -1,8 +1,10 @@
+#!/usr/bin/python
+
 import sys
 import urllib
 import json
 
-__API_KEY = '4a841e9f830dd6e6fdd441b264614677'
+__API_KEY = ''
 __API_URL = 'http://api.ipstack.com/{0}?access_key={1}'
 
 def ip2geoinfo(address):
@@ -28,8 +30,10 @@ def process_crawler_log(path, output):
     output.close()
 
 if __name__== "__main__":
-    if len(sys.argv) != 3:
-        print 'ip2geo crawler-log-file output-file'
+    if len(sys.argv) != 4:
+        print 'ip2geo APIKEY crawler-log-file output-file'
         exit(0)
 
-    process_crawler_log(sys.argv[1], sys.argv[2])
+    __API_KEY = sys.argv[1]
+
+    process_crawler_log(sys.argv[2], sys.argv[3])

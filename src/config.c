@@ -42,14 +42,14 @@
 
 #include "config.h"
 
-/* Minutes to wait between new crawler instances */
-#define CRAWLER_INTERVAL            60
+/* Minutes to wait between new crawler round */
+#define CRAWLER_INTERVAL            30
 
 /* Maximum number of concurrent crawler instances */
-#define MAX_CRAWLERS                3
+#define MAX_CRAWLERS                5
 
 /* Number of seconds to wait for new nodes before a crawler times out and exits */
-#define CRAWLER_TIMEOUT             20
+#define CRAWLER_TIMEOUT             30
 
 /* Default maximum number of nodes the nodes list can store */
 #define INITIAL_NODES_LIST_SIZE     4096

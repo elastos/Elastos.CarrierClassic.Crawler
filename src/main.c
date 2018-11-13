@@ -49,7 +49,7 @@
 static crawler_config *config;
 static int interrupted = 0;
 static uint32_t running_crawlers = 0;
-static time_t last_crawler_stamp;
+static time_t last_stamp;
 static uint32_t last_index = 0;
 
 typedef struct Crawler {
@@ -64,7 +64,6 @@ typedef struct Crawler {
 
     pthread_t    tid;
     time_t       stamp;
-    uint32_t     round;
     uint32_t     index;
 } Crawler;
 
@@ -170,7 +169,7 @@ static void getnodes_response_callback(IP_Port *ip_port, const uint8_t *public_k
         base58_encode(public_key, TOX_PUBLIC_KEY_SIZE, id_str, &len);
         ip_ntoa(&ip_port->ip, ip_str, sizeof(ip_str));
 
-        vlogV("Crawler[%u/%u] - %s %s - %u", cwl->round, cwl->index, id_str, ip_str, cwl->num_nodes);
+        vlogV("Crawler[%u] - %s %s - %u", cwl->index, id_str, ip_str, cwl->num_nodes);
     }
 }
 
@@ -209,6 +208,19 @@ static size_t crawler_send_node_requests(Crawler *cwl)
     return count;
 }
 
+static void crawler_connection_status(Tox *tox, TOX_CONNECTION status, void *user_data)
+{
+    Crawler *cwl = (Crawler *)user_data;
+    static const char *status_name[] = {
+        "Disconnected",
+        "Connected/TCP",
+        "Connected/UDP"
+    };
+
+    vlogI("Crawler[%u] - connection status: %s", cwl->index, status_name[status]);
+
+}
+
 /*
  * Returns a pointer to an inactive crawler in the threads array.
  * Returns NULL if there are no crawlers available.
@@ -239,6 +251,8 @@ static Crawler *crawler_new(void)
         return NULL;
     }
 
+    tox_callback_self_connection_status(cwl->tox, crawler_connection_status);
+
     cwl->dht = ((Messenger *)cwl->tox)->dht;   // Casting fuckery so we can access the DHT object directly
 
     DHT_callback_getnodes_response(cwl->dht, getnodes_response_callback, cwl);
@@ -246,8 +260,7 @@ static Crawler *crawler_new(void)
     cwl->stamp = now();
     cwl->last_getnodes_request = cwl->stamp;
     cwl->last_new_node = cwl->stamp;
-    cwl->round = (last_index / config->max_crawlers) + 1;
-    cwl->index = (last_index % config->max_crawlers) + 1;
+    cwl->index = ++last_index;
 
     crawler_bootstrap(cwl);
 
@@ -333,17 +346,17 @@ static int crawler_dump_nodes(Crawler *cwl)
 
     rc = crawler_get_data_filename(cwl, data_file, sizeof(data_file));
     if (rc != 0) {
-        vlogE("Crwaler[%u/%u] - get node list filename failed: %d", cwl->round, cwl->index, errno);
+        vlogE("Crwaler[%u] - get node list filename failed: %d", cwl->index, errno);
         return -1;
     }
 
-    vlogD("Crwaler[%u/%u] - current node list filename: %s", cwl->round, cwl->index, data_file);
+    vlogD("Crwaler[%u] - current node list filename: %s", cwl->index, data_file);
 
     snprintf(temp_file, sizeof(temp_file), "%s%s", data_file, TEMP_FILE_EXT);
 
     fp = fopen(temp_file, "w");
     if (fp == NULL) {
-        vlogE("Crwaler[%u/%u] - open node list filename failed: %d", cwl->round, cwl->index, errno);
+        vlogE("Crwaler[%u] - open node list filename failed: %d", cwl->index, errno);
         return -1;
     }
 
@@ -357,7 +370,7 @@ static int crawler_dump_nodes(Crawler *cwl)
     fclose(fp);
 
     if (rename(temp_file, data_file) != 0) {
-        vlogE("Crwaler[%u/%u] - rename temp node list filename failed: %d", cwl->round, cwl->index, errno);
+        vlogE("Crwaler[%u] - rename temp node list filename failed: %d", cwl->index, errno);
         return -1;
     }
 
@@ -388,25 +401,25 @@ void *crawler_thread_routine(void *data)
 
     __sync_add_and_fetch(&running_crawlers, 1);
 
-    vlogI("Crawler[%u/%u] - created and running.", cwl->round, cwl->index);
+    vlogI("Crawler[%u] - created and running.", cwl->index);
 
     while (!crawler_finished(cwl)) {
-        tox_iterate(cwl->tox, NULL);
+        tox_iterate(cwl->tox, cwl);
         crawler_send_node_requests(cwl);
         usleep(tox_iteration_interval(cwl->tox) * 1000);
     }
 
-    vlogI("Crawler[%u/%u] - discovered %u nodes.", cwl->round, cwl->index, cwl->num_nodes);
+    vlogI("Crawler[%u] - discovered %u nodes.", cwl->index, cwl->num_nodes);
 
     if (!interrupted) {
         int rc;
 
-        vlogI("Crawler[%u/%u] - dumping nodes list...", cwl->round, cwl->index);
+        vlogI("Crawler[%u] - dumping nodes list...", cwl->index);
         rc = crawler_dump_nodes(cwl);
         if (rc != 0) {
-            vlogE("Crawler[%u/%u] - dumping nodes list failed: ", cwl->round, cwl->index, rc);
+            vlogE("Crawler[%u] - dumping nodes list failed: ", cwl->index, rc);
         } else {
-            vlogI("Crawler[%u/%u] - dumping nodes list success", cwl->round, cwl->index);
+            vlogI("Crawler[%u] - dumping nodes list success", cwl->index);
         }
     }
 
@@ -414,7 +427,7 @@ void *crawler_thread_routine(void *data)
 
     __sync_sub_and_fetch(&running_crawlers, 1);
 
-    vlogI("Crawler[%u/%u] finished and cleaned up.", cwl->round, cwl->index);
+    vlogI("Crawler[%u] finished and cleaned up.", cwl->index);
 
     return NULL;
 }
@@ -425,21 +438,15 @@ void *crawler_thread_routine(void *data)
  * Returns 0 on success or if new instance is not needed, otherwise returns
  * error number
  */
-#define INTERVAL2       90
-
 static int crawler_controller(void)
 {
     pthread_attr_t attr;
     Crawler *cwl;
-    uint32_t interval;
     int rc;
 
-    interval = (last_index % config->max_crawlers) ? INTERVAL2 : config->interval;
-
     vlogV("Controller - inspection, %d crawlers running.", running_crawlers);
-    vlogD("Controller - inspection, current interval %d.", interval);
 
-    if (running_crawlers >= config->max_crawlers || ! timedout(last_crawler_stamp, interval))
+    if (running_crawlers >= config->max_crawlers || ! timedout(last_stamp, config->interval))
         return 0;
 
     cwl = crawler_new();
@@ -460,11 +467,7 @@ static int crawler_controller(void)
         return -1;
     }
 
-    last_crawler_stamp = now();
-
-    last_index++;
-    if ((last_index % config->max_crawlers) == 0)
-        last_crawler_stamp -= (INTERVAL2 * config->max_crawlers);
+    last_stamp = now();
 
     return 0;
 }
