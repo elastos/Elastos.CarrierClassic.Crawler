@@ -23,6 +23,8 @@
 #ifndef __CRAWLER_CONFIG_H__
 #define __CRAWLER_CONFIG_H__
 
+#include <stdint.h>
+
 typedef struct {
     const char *ipv4;
     const char *ipv6;
