@@ -71,3 +71,7 @@ install(TARGETS elacrawler
     ARCHIVE DESTINATION "lib"
     LIBRARY DESTINATION "lib")
 
+install(FILES elacrawler.conf
+    DESTINATION "etc/carrier"
+    RENAME "crawler.conf")
+

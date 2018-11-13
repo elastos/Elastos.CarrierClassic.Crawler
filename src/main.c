@@ -90,7 +90,9 @@ static inline bool timedout(time_t timestamp, time_t timeout)
 /* Attempts to bootstrap to every listed bootstrap node */
 static void crawler_bootstrap(Crawler *cwl)
 {
-    for (int i = 0; i < config->bootstraps_size; ++i) {
+    int i;
+
+    for (i = 0; i < config->bootstraps_size; ++i) {
         TOX_ERR_BOOTSTRAP err;
         bootstrap_node *bs_node = config->bootstraps + i;
 
@@ -128,7 +130,9 @@ static void crawler_interrupt(int sig)
  */
 static bool node_crawled(Crawler *cwl, const uint8_t *public_key)
 {
-    for (uint32_t i = 0; i < cwl->num_nodes; ++i) {
+    uint32_t i;
+
+    for (i = 0; i < cwl->num_nodes; ++i) {
         if (memcmp(public_key, cwl->nodes_list[i].public_key, TOX_PUBLIC_KEY_SIZE) == 0) {
             return true;
         }
@@ -141,16 +145,14 @@ static void getnodes_response_callback(IP_Port *ip_port, const uint8_t *public_k
 {
     Crawler *cwl = object;
 
-    if (node_crawled(cwl, public_key)) {
+    if (node_crawled(cwl, public_key))
         return;
-    }
 
     if (cwl->num_nodes + 1 >= cwl->nodes_list_size) {
         Node_format *tmp = realloc(cwl->nodes_list, cwl->nodes_list_size * 2 * sizeof(Node_format));
 
-        if (tmp == NULL) {
+        if (tmp == NULL)
             return;
-        }
 
         cwl->nodes_list = tmp;
         cwl->nodes_list_size *= 2;
@@ -179,19 +181,20 @@ static void getnodes_response_callback(IP_Port *ip_port, const uint8_t *public_k
  */
 static size_t crawler_send_node_requests(Crawler *cwl)
 {
-    if (!timedout(cwl->last_getnodes_request, config->request_interval)) {
-        return 0;
-    }
-
     size_t count = 0;
     uint32_t i;
 
+    if (!timedout(cwl->last_getnodes_request, config->request_interval))
+        return 0;
+
     for (i = cwl->send_ptr; count < config->requests_per_interval && i < cwl->num_nodes; ++i) {
+        size_t j = 0;
+
         DHT_getnodes(cwl->dht, &cwl->nodes_list[i].ip_port,
                      cwl->nodes_list[i].public_key,
                      cwl->nodes_list[i].public_key);
 
-        for (size_t j = 0; j < config->random_requests; ++j) {
+        for (j = 0; j < config->random_requests; ++j) {
             int r = rand() % cwl->num_nodes;
 
             DHT_getnodes(cwl->dht, &cwl->nodes_list[i].ip_port,
@@ -321,9 +324,8 @@ static int crawler_get_data_filename(Crawler *cwl, char *buf, size_t buf_len)
     snprintf(path, sizeof(path), "%s/%s", config->data_dir, tmstr);
 
     if (stat(path, &st) == -1 && errno == ENOENT) {
-        if (mkdirs(path, 0700) == -1) {
+        if (mkdirs(path, 0700) == -1)
             return -1;
-        }
     }
 
     strftime(tmstr, sizeof(tmstr), "%H%M%S", localtime(&cwl->stamp));
@@ -463,6 +465,7 @@ static int crawler_controller(void)
     pthread_attr_destroy(&attr);
 
     if (rc != 0) {
+        crawler_kill(cwl);
         vlogE("Controller - Create new crawler thread failed: %d\n", rc);
         return -1;
     }
