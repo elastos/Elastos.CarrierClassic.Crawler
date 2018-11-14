@@ -29,6 +29,7 @@
 #include <limits.h>
 #include <errno.h>
 #include <getopt.h>
+#include <pthread.h>
 #include <sys/stat.h>
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
@@ -38,6 +39,8 @@
 #include <rc_mem.h>
 #include <base58.h>
 #include <vlog.h>
+
+#include <IP2Location.h>
 
 #include <tox/tox.h>
 #include "toxcore/DHT.h"
@@ -66,6 +69,50 @@ typedef struct Crawler {
     uint32_t     index;
 } Crawler;
 
+static IP2Location *db;
+static pthread_mutex_t db_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int ip2location_init(const char *database)
+{
+    db = IP2Location_open((char *)database);
+    if (!db) {
+        vlogW("IP2Location - open database failed, check config file!");
+        return -1;
+    }
+
+    if (IP2Location_open_mem(db, IP2LOCATION_SHARED_MEMORY) == -1)
+        vlogW("IP2Location - open shared memory failed.");
+
+    return 0;
+}
+
+static void ip2location_cleanup(void)
+{
+    IP2Location_close(db);
+    IP2Location_delete_shm();
+}
+
+static char *ip2location(const char *ip, char *result, size_t len)
+{
+    IP2LocationRecord *record;
+
+    if (!db) {
+        *result = 0;
+        return result;
+    }
+
+    pthread_mutex_lock(&db_lock);
+    record = IP2Location_get_all(db, (char *)ip);
+    pthread_mutex_unlock(&db_lock);
+
+    if (record)
+        snprintf(result, len, "%s, %s, %s", record->country_long, record->region, record->city);
+    else
+        *result = 0;
+
+    return result;
+}
+
 static inline time_t now(void)
 {
     return time(NULL);
@@ -93,15 +140,15 @@ static void crawler_bootstrap(Crawler *cwl)
         if (bs_node->ipv4) {
             tox_bootstrap(cwl->tox, bs_node->ipv4, bs_node->port, bin_key, &err);
             if (err != TOX_ERR_BOOTSTRAP_OK)
-                fprintf(stderr, "Failed to bootstrap DHT via: %s %d (error %d)\n",
-                        bs_node->ipv4, bs_node->port, err);
+                vlogW("Crawler[%u] - failed to bootstrap DHT via: %s %d (error %d)\n",
+                      cwl->index, bs_node->ipv4, bs_node->port, err);
         }
 
         if (bs_node->ipv6) {
             tox_bootstrap(cwl->tox, bs_node->ipv6, bs_node->port, bin_key, &err);
             if (err != TOX_ERR_BOOTSTRAP_OK)
-                fprintf(stderr, "Failed to bootstrap DHT via: %s %d (error %d)\n",
-                        bs_node->ipv6, bs_node->port, err);
+                vlogW("Crawler[%u] - failed to bootstrap DHT via: %s %d (error %d)\n",
+                       cwl->index, bs_node->ipv6, bs_node->port, err);
         }
     }
 }
@@ -137,13 +184,14 @@ static void getnodes_response_callback(IP_Port *ip_port, const uint8_t *public_k
         return;
 
     if (cwl->num_nodes + 1 >= cwl->nodes_list_size) {
-        Node_format *tmp = realloc(cwl->nodes_list, cwl->nodes_list_size * 2 * sizeof(Node_format));
+        Node_format *tmp = realloc(cwl->nodes_list,
+            (cwl->nodes_list_size + config->initial_nodes_list_size) * sizeof(Node_format));
 
         if (tmp == NULL)
             return;
 
         cwl->nodes_list = tmp;
-        cwl->nodes_list_size *= 2;
+        cwl->nodes_list_size += config->initial_nodes_list_size;
     }
 
     Node_format node;
@@ -152,14 +200,16 @@ static void getnodes_response_callback(IP_Port *ip_port, const uint8_t *public_k
     memcpy(&cwl->nodes_list[cwl->num_nodes++], &node, sizeof(Node_format));
     cwl->last_new_node = time(NULL);
 
-    {
+    if (config->log_level >= VLOG_VERBOSE) {
         char id_str[128];
         char ip_str[IP_NTOA_LEN];
+        char loc_str[256];
         size_t len = sizeof(id_str);
         base58_encode(public_key, TOX_PUBLIC_KEY_SIZE, id_str, &len);
         ip_ntoa(&ip_port->ip, ip_str, sizeof(ip_str));
+        ip2location(ip_str, loc_str, sizeof(loc_str));
 
-        vlogV("Crawler[%u] - %s %s - %u", cwl->index, id_str, ip_str, cwl->num_nodes);
+        vlogV("Crawler[%u] - %s, %s, %s - %u", cwl->index, id_str, ip_str, loc_str, cwl->num_nodes);
     }
 }
 
@@ -333,6 +383,7 @@ static int crawler_dump_nodes(Crawler *cwl)
     FILE *fp;
     char id_str[64];
     char ip_str[IP_NTOA_LEN];
+    char loc_str[256];
 
     rc = crawler_get_data_filename(cwl, data_file, sizeof(data_file));
     if (rc != 0) {
@@ -354,7 +405,9 @@ static int crawler_dump_nodes(Crawler *cwl)
         size_t len = sizeof(id_str);
         base58_encode(cwl->nodes_list[i].public_key, CRYPTO_PUBLIC_KEY_SIZE, id_str, &len);
         ip_ntoa(&cwl->nodes_list[i].ip_port.ip, ip_str, sizeof(ip_str));
-        fprintf(fp, "%s %s\n", id_str, ip_str);
+        ip2location(ip_str, loc_str, sizeof(loc_str));
+
+        fprintf(fp, "%s, %s, %s\n", id_str, ip_str, loc_str);
     }
 
     fclose(fp);
@@ -554,9 +607,17 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    vlog_init(log_level > 0 ? log_level : config->log_level, config->log_file, NULL);
+    if (log_level > 0)
+        config->log_level = log_level;
+
+    vlog_init(config->log_level, config->log_file, NULL);
 
     signal(SIGINT, crawler_interrupt);
+
+    if (config->database)
+        ip2location_init(config->database);
+    else
+        vlogW("IP2Location - no database configured, will disable location lookup.");
 
     while (true) {
         int rc;
@@ -567,6 +628,11 @@ int main(int argc, char **argv)
         rc = crawler_controller();
         sleep(rc == 0 ? 5 : 30);
     }
+
+    while (running_crawlers)
+        sleep(1);
+
+    ip2location_cleanup();
 
     deref(config);
 

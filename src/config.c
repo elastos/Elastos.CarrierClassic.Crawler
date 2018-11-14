@@ -76,6 +76,9 @@ static void config_destructor(void *p)
     if (config->data_dir)
         free(config->data_dir);
 
+    if (config->database)
+        free(config->database);
+
     if (config->bootstraps) {
         int i;
 
@@ -106,9 +109,10 @@ static void qualified_path(const char *path, const char *ref, char *qualified)
             const char *p = strrchr(ref, '/');
             if (!p) p = ref;
 
-            if (p - ref > 0)
+            if (p - ref > 0) {
                 strncpy(qualified, ref, p - ref);
-            else
+                qualified[p - ref] = 0;
+            } else
                 *qualified = 0;
         } else {
             getcwd(qualified, PATH_MAX);
@@ -184,6 +188,13 @@ crawler_config *load_config(const char *config_file)
         char path[PATH_MAX];
         qualified_path(stropt, config_file, path);
         config->log_file = strdup(path);
+    }
+
+    rc = config_lookup_string(&cfg, "ip2location_database", &stropt);
+    if (rc && *stropt) {
+        char path[PATH_MAX];
+        qualified_path(stropt, config_file, path);
+        config->database = strdup(path);
     }
 
     setting = config_lookup(&cfg, "bootstraps");
