@@ -46,6 +46,8 @@ typedef struct {
     int log_level;
     char *log_file;
 
+    char *database;
+
     uint32_t bootstraps_size;
     bootstrap_node *bootstraps;
 } crawler_config;

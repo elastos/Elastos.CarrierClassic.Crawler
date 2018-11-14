@@ -19,3 +19,7 @@ add_submodule(libcrystal
 add_submodule(toxcore0
     DIRECTORY toxcore
     DEPENDS platform-specific libsodium libconfig)
+
+add_submodule(IP2Location8
+    DIRECTORY ip2location
+    DEPENDS platform-specific)

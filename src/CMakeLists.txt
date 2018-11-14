@@ -17,7 +17,7 @@ endif()
 set(SRC main.c config.c)
 
 if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
-    set(SYSTEM_LIBS pthread)
+    set(SYSTEM_LIBS rt pthread)
 endif()
 
 include_directories(
@@ -48,7 +48,8 @@ set(LIBS
     toxnetwork
     toxnetcrypto
     crystal
-    config)
+    config
+    IP2Location)
 
 if(WIN32)
     set(LIBS
