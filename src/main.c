@@ -87,7 +87,7 @@ static void crawler_bootstrap(Crawler *cwl)
 
         uint8_t bin_key[TOX_PUBLIC_KEY_SIZE];
         if (base58_decode(bs_node->key, strlen(bs_node->key),
-                bin_key, sizeof(bin_key)) == sizeof(bin_key))
+                bin_key, sizeof(bin_key)) != sizeof(bin_key))
             continue;
 
         if (bs_node->ipv4) {
@@ -103,7 +103,6 @@ static void crawler_bootstrap(Crawler *cwl)
                 fprintf(stderr, "Failed to bootstrap DHT via: %s %d (error %d)\n",
                         bs_node->ipv6, bs_node->port, err);
         }
-
     }
 }
 
