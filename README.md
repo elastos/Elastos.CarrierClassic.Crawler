@@ -21,22 +21,22 @@ Please refer to [ip2location.com](https://www.ip2location.com/) to download ip2l
 
 The list of config items and their description is briefly profiled below:
 
-####1. internval
+#### 1. internval
 The allowing least interval value in munites for the next cralwer to begin crawling carrier nodes.
 
-####2. timeout
+#### 2. timeout
 The timeout value in seconds for the **get nodes** request to crawler.
 
-####3. data_dir
+#### 3. data_dir
 This data directory stores carrier node cached data itself and all dumped files of cralwed carrier nodes information.
 
-####4. log\_level and log\_file
+#### 4. log\_level and log\_file
 The level value and the file path to for logging.
 
-####5. ip2location_database
+#### 5. ip2location_database
 The location of ip2location database relative to current config file.
 
-####6. bootstraps
+#### 6. bootstraps
 The bootstrap nodes list.
 
 ## Build from source
