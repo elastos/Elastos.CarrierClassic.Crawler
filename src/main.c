@@ -156,7 +156,7 @@ static void crawler_bootstrap(Crawler *cwl)
 
 static void crawler_interrupt(int sig)
 {
-    vlogI("Controller - INT signal catched, interrupte all crawlers.");
+    vlogI("Controller - INT signal catched, interrupting all crawlers.");
     interrupted = 1;
 }
 
