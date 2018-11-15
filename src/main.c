@@ -54,6 +54,9 @@ static uint32_t running_crawlers = 0;
 static time_t last_stamp;
 static uint32_t last_index = 0;
 static uint32_t node_limit = UINT32_MAX;
+static Node_format *global_nodes_list;
+static uint32_t num_global_nodes = 0;
+static uint32_t global_nodes_list_size = 0;
 
 typedef struct Crawler {
     Tox         *tox;
@@ -174,6 +177,12 @@ static bool node_crawled(Crawler *cwl, const uint8_t *public_key)
         }
     }
 
+    for (i = 0; i < num_global_nodes; ++i) {
+        if (memcmp(public_key, global_nodes_list[i].public_key, TOX_PUBLIC_KEY_SIZE) == 0) {
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -195,10 +204,24 @@ static void getnodes_response_callback(IP_Port *ip_port, const uint8_t *public_k
         cwl->nodes_list_size += config->initial_nodes_list_size;
     }
 
+    if (num_global_nodes + 1 >= global_nodes_list_size) {
+        Node_format *gtmp = realloc(cwl->nodes_list,
+            (global_nodes_list_size + config->initial_nodes_list_size) * sizeof(Node_format));
+
+        if (gtmp == NULL)
+            return;
+
+        global_nodes_list = gtmp;
+        global_nodes_list_size += config->initial_nodes_list_size;
+    }
+
     Node_format node;
     memcpy(&node.ip_port, ip_port, sizeof(IP_Port));
     memcpy(node.public_key, public_key, TOX_PUBLIC_KEY_SIZE);
     memcpy(&cwl->nodes_list[cwl->num_nodes++], &node, sizeof(Node_format));
+
+    memcpy(&global_nodes_list[num_global_nodes++], &node, sizeof(Node_format));
+
     cwl->last_new_node = time(NULL);
 
     if (config->log_level >= VLOG_VERBOSE) {
@@ -210,7 +233,7 @@ static void getnodes_response_callback(IP_Port *ip_port, const uint8_t *public_k
         ip_ntoa(&ip_port->ip, ip_str, sizeof(ip_str));
         ip2location(ip_str, loc_str, sizeof(loc_str));
 
-        vlogV("Crawler[%u] - %s, %s, %s - %u", cwl->index, id_str, ip_str, loc_str, cwl->num_nodes);
+        vlogV("Crawler[%u] - %s, %s, %s - %u (%u global)", cwl->index, id_str, ip_str, loc_str, cwl->num_nodes, num_global_nodes);
     }
 }
 
