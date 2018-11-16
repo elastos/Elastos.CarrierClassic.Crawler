@@ -53,6 +53,7 @@ static int interrupted = 0;
 static uint32_t running_crawlers = 0;
 static time_t last_stamp;
 static uint32_t last_index = 0;
+static uint32_t node_limit = UINT32_MAX;
 
 typedef struct Crawler {
     Tox         *tox;
@@ -259,7 +260,6 @@ static void crawler_connection_status(Tox *tox, TOX_CONNECTION status, void *use
     };
 
     vlogI("Crawler[%u] - connection status: %s", cwl->index, status_name[status]);
-
 }
 
 /*
@@ -378,6 +378,7 @@ static int crawler_get_data_filename(Crawler *cwl, char *buf, size_t buf_len)
 static int crawler_dump_nodes(Crawler *cwl)
 {
     int rc;
+    uint32_t i;
     char data_file[PATH_MAX];
     char temp_file[PATH_MAX];
     FILE *fp;
@@ -401,7 +402,7 @@ static int crawler_dump_nodes(Crawler *cwl)
         return -1;
     }
 
-    for (uint32_t i = 0; i < cwl->num_nodes; ++i) {
+    for (i = 0; i < cwl->num_nodes; ++i) {
         size_t len = sizeof(id_str);
         base58_encode(cwl->nodes_list[i].public_key, CRYPTO_PUBLIC_KEY_SIZE, id_str, &len);
         ip_ntoa(&cwl->nodes_list[i].ip_port.ip, ip_str, sizeof(ip_str));
@@ -432,6 +433,11 @@ static bool crawler_finished(Crawler *cwl)
 {
     if (interrupted || (cwl->send_ptr == cwl->num_nodes &&
             timedout(cwl->last_new_node, config->timeout))) {
+        return true;
+    }
+
+    if (cwl->num_nodes >= node_limit) {
+        interrupted = 2;
         return true;
     }
 
@@ -561,12 +567,16 @@ int main(int argc, char **argv)
     sys_coredump_set(true);
 #endif
 
-    while ((opt = getopt_long(argc, argv, "c:v:h?",
+    while ((opt = getopt_long(argc, argv, "c:v:l:h?",
             options, &idx)) != -1) {
         switch (opt) {
         case 'c':
             strncpy(config_file, optarg, sizeof(config_file));
             config_file[sizeof(config_file)-1] = 0;
+            break;
+
+        case 'l':
+            node_limit = atoi(optarg);
             break;
 
         case 'v':
@@ -636,5 +646,5 @@ int main(int argc, char **argv)
 
     deref(config);
 
-    return 0;
+    return (interrupted == 2) ? 0 : 1;
 }

@@ -1,0 +1,15 @@
+language: c
+
+matrix:
+  include:
+  - os: osx
+    env: BUILD_ENV=darwin_x64
+
+  - env: BUILD_ENV=linux_x64
+    sudo: true
+
+script:
+  - cd $TRAVIS_BUILD_DIR && mkdir build && cd build && mkdir $BUILD_ENV && cd $BUILD_ENV
+  - cmake -DCMAKE_INSTALL_PREFIX=dist ../..
+  - make && make install
+  - cd dist/bin && ./elacrawler -c ../etc/carrier/crawler.conf -v 7 -l 20
