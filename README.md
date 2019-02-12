@@ -70,4 +70,5 @@ We welcome contributions to the Elastos Carrier Project.
 A sincere thank you to all teams and projects that we rely on directly or indirectly.
 
 ## License
-MIT
+
+GPLv3
