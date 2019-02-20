@@ -106,9 +106,10 @@ static char *ip2location(const char *ip, char *result, size_t len)
     record = IP2Location_get_all(db, (char *)ip);
     pthread_mutex_unlock(&db_lock);
 
-    if (record)
+    if (record) {
         snprintf(result, len, "%s, %s, %s", record->country_long, record->region, record->city);
-    else
+        IP2Location_free_record(record);
+    } else
         *result = 0;
 
     return result;
