@@ -33,12 +33,7 @@
 #endif
 
 #include <libconfig.h>
-#include <rc_mem.h>
-#include <vlog.h>
-
-#if defined(_WIN32) || defined(_WIN64)
-#include <posix_helper.h>
-#endif
+#include <crystal.h>
 
 #include "config.h"
 

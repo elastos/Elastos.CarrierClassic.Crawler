@@ -49,18 +49,17 @@
 #include <signal.h>
 #include <limits.h>
 #include <errno.h>
-#include <getopt.h>
 #include <pthread.h>
 #include <sys/stat.h>
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
 #include <sys/types.h>
+#ifdef HAVE_GETOPT_H
+#include <getopt.h>
+#endif
 
-#include <rc_mem.h>
-#include <base58.h>
-#include <vlog.h>
-
+#include <crystal.h>
 #include <IP2Location.h>
 
 #include <tox/tox.h>
