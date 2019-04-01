@@ -47,9 +47,9 @@ With CMake installed, use the following commands to conduct the whole build step
 
 ```shell
 $ git clone https://github.com/elastos/Elastos.NET.Carrier.Cralwer
+$ mkdir build
 $ cd build
-$ mkdir macos
-$ cmake -DCMAKE_INSTALL_PREFIX=dist ../..
+$ cmake -DCMAKE_INSTALL_PREFIX=dist ..
 $ make install
 ```
 
