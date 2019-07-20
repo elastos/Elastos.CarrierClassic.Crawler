@@ -1,7 +1,7 @@
 Carrier Crawler
 ===============
 
-[![Build Status](https://travis-ci.org/elastos/Elastos.NET.Carrier.Crawler.svg)](https://travis-ci.org/elastos/Elastos.NET.Carrier.Crawler)
+[![Build Status](https://travis-ci.com/elastos/Elastos.NET.Carrier.Crawler.svg)](https://travis-ci.com/elastos/Elastos.NET.Carrier.Crawler)
 
 ## Summary
 
